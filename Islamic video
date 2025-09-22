@@ -1,0 +1,370 @@
+
+// package.json
+{
+  "name": "islamic-media-site",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "firebase": "^10.0.0",
+    "react-router-dom": "^6.3.0",
+    "browser-image-compression": "^1.0.17",
+    "uuid": "^9.0.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  }
+}
+
+---
+
+// src/firebase.js
+import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
+
+// اپنی Firebase کنفیگ یہاں ڈالیں (Firebase Console سے حاصل کریں)
+const firebaseConfig = {
+  apiKey: "REPLACE_WITH_YOUR_API_KEY",
+  authDomain: "REPLACE_WITH_AUTH_DOMAIN",
+  projectId: "REPLACE_WITH_PROJECT_ID",
+  storageBucket: "REPLACE_WITH_STORAGE_BUCKET",
+  messagingSenderId: "REPLACE_WITH_MSG_SENDER",
+  appId: "REPLACE_WITH_APP_ID"
+};
+
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export const storage = getStorage(app);
+
+---
+
+// src/index.jsx
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import App from './pages/App';
+import './styles.css';
+
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/*" element={<App/>} />
+      </Routes>
+    </BrowserRouter>
+  </React.StrictMode>
+);
+
+---
+
+// src/pages/App.jsx
+import React from 'react';
+import { Link, Routes, Route } from 'react-router-dom';
+import Home from './Home';
+import Profile from './Profile';
+import Upload from './Upload';
+import AuthPage from './AuthPage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebase';
+
+export default function App(){
+  const [user, setUser] = React.useState(null);
+  React.useEffect(()=>{
+    const unsub = onAuthStateChanged(auth, u=> setUser(u));
+    return ()=> unsub();
+  },[]);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-sky-50 to-white">
+      <header className="p-4 flex justify-between items-center shadow-sm bg-white/60 backdrop-blur">
+        <h1 className="text-xl font-bold">اسلامی میڈیا ہب</h1>
+        <nav className="space-x-3">
+          <Link to="/">Home</Link>
+          <Link to="/upload">Upload</Link>
+          {user ? <Link to="/profile">Profile</Link> : <Link to="/auth">Login</Link>}
+        </nav>
+      </header>
+
+      <main className="p-4">
+        <Routes>
+          <Route path="/" element={<Home/>} />
+          <Route path="/upload" element={<Upload user={user}/>} />
+          <Route path="/profile" element={<Profile user={user}/>} />
+          <Route path="/auth" element={<AuthPage/>} />
+        </Routes>
+      </main>
+
+      <footer className="p-4 text-center text-sm text-slate-500">
+        © {new Date().getFullYear()} اسلامی میڈیا ہب — Privacy & Terms
+      </footer>
+    </div>
+  );
+}
+
+---
+
+// src/pages/AuthPage.jsx
+import React from 'react';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../firebase';
+
+export default function AuthPage(){
+  const [email,setEmail]=React.useState('');
+  const [pass,setPass]=React.useState('');
+  const [mode,setMode]=React.useState('login');
+  const [err,setErr]=React.useState('');
+
+  async function submit(e){
+    e.preventDefault(); setErr('');
+    try{
+      if(mode==='login') await signInWithEmailAndPassword(auth,email,pass);
+      else await createUserWithEmailAndPassword(auth,email,pass);
+    }catch(error){ setErr(error.message); }
+  }
+
+  return (
+    <div className="max-w-md mx-auto bg-white p-6 rounded shadow">
+      <h2 className="text-2xl mb-4">{mode==='login'? 'Login' : 'Register'}</h2>
+      <form onSubmit={submit} className="space-y-3">
+        <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" className="w-full p-2 border rounded" />
+        <input value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password" type="password" className="w-full p-2 border rounded" />
+        <div className="flex justify-between items-center">
+          <button className="px-4 py-2 bg-blue-600 text-white rounded">{mode==='login'? 'Login' : 'Register'}</button>
+          <button type="button" onClick={()=>setMode(mode==='login'?'register':'login')} className="text-sm underline">{mode==='login'? 'Create account' : 'Have an account?'}</button>
+        </div>
+        {err && <div className="text-red-600">{err}</div>}
+      </form>
+    </div>
+  );
+}
+
+---
+
+// src/pages/Upload.jsx
+import React from 'react';
+import imageCompression from 'browser-image-compression';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { storage, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { v4 as uuidv4 } from 'uuid';
+
+export default function Upload({user}){
+  const [title,setTitle]=React.useState('');
+  const [file,setFile]=React.useState(null);
+  const [progress,setProgress]=React.useState(0);
+  const [status,setStatus]=React.useState('');
+
+  async function handleImage(e){
+    const f = e.target.files[0];
+    if(!f) return;
+    // compress image
+    if(f.type.startsWith('image/')){
+      setStatus('Compressing image...');
+      const options = { maxSizeMB: 0.5, maxWidthOrHeight: 1600, useWebWorker: true };
+      try{
+        const compressed = await imageCompression(f, options);
+        setFile(compressed);
+        setStatus('Ready to upload (image)');
+      }catch(err){ setStatus('Compression failed: '+err.message); }
+    } else {
+      setFile(f);
+      setStatus('Ready to upload (file)');
+    }
+  }
+
+  async function submit(e){
+    e.preventDefault();
+    if(!user) return alert('Please login first');
+    if(!file) return alert('Choose a file');
+    setStatus('Uploading...');
+    const id = uuidv4();
+    const storageRef = ref(storage, `uploads/${user.uid}/${id}`);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+    uploadTask.on('state_changed', (snapshot)=>{
+      const p = (snapshot.bytesTransferred / snapshot.totalBytes)*100;
+      setProgress(Math.round(p));
+    }, (err)=>{ setStatus('Upload error: '+err.message); }, async ()=>{
+      const url = await getDownloadURL(uploadTask.snapshot.ref);
+      await addDoc(collection(db,'posts'), {
+        id, title, url, uid: user.uid, createdAt: serverTimestamp(), type: file.type
+      });
+      setStatus('Uploaded successfully');
+      setProgress(0); setTitle(''); setFile(null);
+    });
+  }
+
+  return (
+    <div className="max-w-xl mx-auto bg-white p-6 rounded shadow">
+      <h2 className="text-xl mb-3">Upload Image / Video</h2>
+      <form onSubmit={submit} className="space-y-3">
+        <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Title" className="w-full p-2 border rounded" />
+        <input type="file" onChange={handleImage} className="w-full" />
+        {progress>0 && <div>Progress: {progress}%</div>}
+        <div className="flex gap-2">
+          <button className="px-4 py-2 bg-green-600 text-white rounded">Upload</button>
+        </div>
+        <div className="text-sm text-slate-500">{status}</div>
+      </form>
+    </div>
+  );
+}
+
+---
+
+// src/pages/Home.jsx
+import React from 'react';
+import { collection, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase';
+import VideoCard from '../shared/VideoCard';
+
+export default function Home(){
+  const [posts,setPosts]=React.useState([]);
+  React.useEffect(()=>{
+    const q = query(collection(db,'posts'), orderBy('createdAt','desc'), limit(20));
+    const unsub = onSnapshot(q, snap=>{
+      setPosts(snap.docs.map(d=> ({id:d.id, ...d.data()})));
+    });
+    return ()=>unsub();
+  },[]);
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <h2 className="text-2xl mb-4">تازہ ویڈیوز اور ہؤٹوز</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {posts.map(p=> <VideoCard key={p.id} post={p} />)}
+      </div>
+    </div>
+  );
+}
+
+---
+
+// src/shared/VideoCard.jsx
+import React from 'react';
+import { doc, updateDoc, increment } from 'firebase/firestore';
+import { db } from '../firebase';
+
+export default function VideoCard({post}){
+  async function like(){
+    const ref = doc(db,'posts',post.id);
+    await updateDoc(ref, { likes: increment(1) });
+  }
+
+  return (
+    <div className="bg-white p-3 rounded shadow">
+      <h3 className="font-semibold">{post.title}</h3>
+      {/* If external youtube link: we could render iframe; otherwise show stored media */}
+      {post.type && post.type.startsWith('image') ? (
+        <img src={post.url} alt={post.title} className="w-full mt-2 rounded" />
+      ) : (
+        <video controls src={post.url} className="w-full mt-2 rounded" />
+      )}
+      <div className="flex justify-between items-center mt-2">
+        <button onClick={like} className="px-3 py-1 border rounded">Like</button>
+        <div className="text-sm text-slate-500">{post.likes || 0} likes</div>
+      </div>
+    </div>
+  );
+}
+
+---
+
+// src/pages/Profile.jsx
+import React from 'react';
+import { signOut } from 'firebase/auth';
+import { auth, db } from '../firebase';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+
+export default function Profile({user}){
+  const [posts,setPosts]=React.useState([]);
+  React.useEffect(()=>{
+    if(!user) return; 
+    const q = query(collection(db,'posts'), where('uid','==',user.uid));
+    const unsub = onSnapshot(q, snap=> setPosts(snap.docs.map(d=>({id:d.id, ...d.data()}))));
+    return ()=>unsub();
+  },[user]);
+
+  if(!user) return <div>Please login first.</div>;
+
+  return (
+    <div className="max-w-2xl mx-auto bg-white p-6 rounded shadow">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl">{user.email}</h2>
+          <div className="text-sm text-slate-500">UID: {user.uid}</div>
+        </div>
+        <div>
+          <button onClick={()=>signOut(auth)} className="px-3 py-1 border rounded">Logout</button>
+        </div>
+      </div>
+
+      <h3 className="mt-6 mb-3 font-semibold">Your uploads</h3>
+      <div className="space-y-3">
+        {posts.map(p=> (
+          <div key={p.id} className="p-3 border rounded">{p.title} — {p.type}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+---
+
+// src/styles.css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto; }
+
+---
+
+// FIRESTORE structure (suggestion)
+/*
+users (collection)
+  {uid} : { displayName, email, photoURL, bio, createdAt }
+posts (collection)
+  {postId} : { title, url, uid, type, likes, createdAt }
+subscriptions (collection)
+  {id} : {fromUid, toUid, createdAt}
+*/
+
+---
+
+// Deploy & SEO quick steps
+/*
+1) Firebase: create project, enable Authentication (Email/Password, Google), create Firestore (native mode) and Storage.
+2) Replace firebaseConfig in src/firebase.js.
+3) Set proper Storage & Firestore security rules before public launch.
+4) For SEO: deploy site on Vercel or Netlify and add meta tags on top-level pages. Also create sitemap.xml and robots.txt.
+5) Ads: Add Google AdSense script to index.html and place ad slots in components (after approval). Use responsive ad slots.
+6) Image compression already done client-side. For server-side compression on uploads you can add Cloud Functions.
+7) For advanced video editing: integrate a server with ffmpeg or use third-party APIs (Mux, Cloudinary, Zencoder).
+*/
+
+---
+
+// PRIVACY / ISLAMIC CONTENT NOTE
+/*
+- چونکہ آپ اسلامی مواد اپلوڈ کرتے ہیں، یقینی بنائیں کہ مواد کا حقِ اشاعت (copyright) محفوظ ہو۔
+- اپنے ویب سائٹ کے Terms & Privacy بنائیں، اور AdSense کی پالیسیز بھی ملاحظہ کریں۔
+*/
+
+---
+
+// NEXT STEPS — customization I can do for you:
+/*
+1) Convert this to Next.js with SSR for better SEO (recommended).
+2) Add YouTube/TikTok/Twitter oEmbed component to auto-embed links.
+3) Add comments, playlists, channels, monetization dashboard and ad placement.
+4) Add moderator/admin panel and content review workflow.
+5) Integrate payment gateway (Donations / Subscriptions).
+*/
+
+// End of starter package
+

@@ -344,14 +344,7 @@ subscriptions (collection)
 4) For SEO: deploy site on Vercel or Netlify and add meta tags on top-level pages. Also create sitemap.xml and robots.txt.
 5) Ads: Add Google AdSense script to index.html and place ad slots in components (after approval). Use responsive ad slots.
 6) Image compression already done client-side. For server-side compression on uploads you can add Cloud Functions.
-7) For advanced video editing: integrate a server with ffmpeg or use third-party APIs (Mux, Cloudinary, Zencoder).
-*/
-
----
-
-// PRIVACY / ISLAMIC CONTENT NOTE
-/*
-- چونکہ آپ اسلامی مواد اپلوڈ کرتے ہیں، یقینی بنائیں کہ مواد کا حقِ اشاعت (copyright) محفوظ ہو۔
+7) 
 - اپنے ویب سائٹ کے Terms & Privacy بنائیں، اور AdSense کی پالیسیز بھی ملاحظہ کریں۔
 */
 
